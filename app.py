@@ -9,6 +9,7 @@ from streamlit_folium import st_folium
 if "commune_validee" not in st.session_state: st.session_state.commune_validee = "Turenne"
 if "map_center" not in st.session_state: st.session_state.map_center = [45.0, 1.5]
 if "map_zoom" not in st.session_state: st.session_state.map_zoom = 12
+if "layer_type" not in st.session_state: st.session_state.layer_type = "Satellite"
 
 ox.settings.timeout = 180  
 ox.settings.use_cache = True
@@ -53,25 +54,22 @@ if gdf_brut is not None:
     gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_sel)]
     
     if not gdf_final.empty:
+        # Contrôle permanent du type de vue
+        st.session_state.layer_type = st.radio("Type de vue :", ["Satellite", "Carte"], horizontal=True)
+        
         if st.session_state.map_center == [45.0, 1.5]:
             st.session_state.map_center = [gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()]
             
-        st.subheader("📍 Carte des vestiges")
+        # Définition des tuiles basées sur le choix radio
+        tiles = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' if st.session_state.layer_type == "Satellite" else 'openstreetmap'
+        attr = 'Esri World Imagery' if st.session_state.layer_type == "Satellite" else 'OpenStreetMap'
         
-        # Initialisation de la carte avec les deux couches
-        m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom)
-        
-        # Ajout des couches (Satellite par défaut, OSM en option)
-        tile_sat = folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Vue Satellite').add_to(m)
-        tile_osm = folium.TileLayer('openstreetmap', name='Vue Carte').add_to(m)
+        m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=tiles, attr=attr)
         
         for idx, row in gdf_final.iterrows():
             folium.Marker([row.geometry.y, row.geometry.x], icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
         
-        # Ajout du contrôle pour basculer les couches
-        folium.LayerControl().add_to(m)
-        
-        st_data = st_folium(m, width=None, height=500)
+        st_folium(m, width=None, height=500)
         
         st.markdown("---")
         st.subheader("📋 Résultats")
