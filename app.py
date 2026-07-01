@@ -53,20 +53,24 @@ if gdf_brut is not None:
     gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_sel)]
     
     if not gdf_final.empty:
-        # Initialisation du centre si jamais défini
         if st.session_state.map_center == [45.0, 1.5]:
             st.session_state.map_center = [gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()]
             
         st.subheader("📍 Carte des vestiges")
         
-        # Affichage carte stable
+        # Initialisation de la carte avec les deux couches
         m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom)
-        folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri').add_to(m)
+        
+        # Ajout des couches (Satellite par défaut, OSM en option)
+        tile_sat = folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Vue Satellite').add_to(m)
+        tile_osm = folium.TileLayer('openstreetmap', name='Vue Carte').add_to(m)
         
         for idx, row in gdf_final.iterrows():
             folium.Marker([row.geometry.y, row.geometry.x], icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
         
-        # Capture de la carte et du clic tableau
+        # Ajout du contrôle pour basculer les couches
+        folium.LayerControl().add_to(m)
+        
         st_data = st_folium(m, width=None, height=500)
         
         st.markdown("---")
@@ -77,10 +81,9 @@ if gdf_brut is not None:
         
         if evenement and evenement.selection.rows:
             sel = gdf_final.iloc[evenement.selection.rows[0]]
-            # Mise à jour des états persistants
             st.session_state.map_center = [sel.geometry.y, sel.geometry.x]
             st.session_state.map_zoom = 16
-            st.rerun() # Relance une seule fois pour appliquer le recentrage
+            st.rerun()
             
     else:
         st.warning("Aucun résultat.")
