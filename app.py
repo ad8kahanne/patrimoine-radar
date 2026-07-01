@@ -1,7 +1,7 @@
 # --- GESTION DE LA SÉLECTION DANS LE TABLEAU ---
             df_affichage = pd.DataFrame(gdf_final.drop(columns='geometry'))
             
-            # Coordonnées d'affichage par défaut (centre moyen des points trouvés)
+            # Coordonnées d'affichage par défaut
             if not gdf_final.empty:
                 center_y = gdf_final.geometry.y.mean()
                 center_x = gdf_final.geometry.x.mean()
@@ -16,7 +16,7 @@
             st.markdown("---")
             st.subheader("📋 Données détaillées des résultats")
             
-            # CORRECTION ICI : "single-row" avec un tiret
+            # Correction : "single-row" avec tiret et indentation correcte
             evenement_clic = st.dataframe(
                 df_affichage, 
                 selection_mode="single-row", 
