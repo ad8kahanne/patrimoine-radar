@@ -1,84 +1,95 @@
-# --- TRAITEMENT ET FILTRAGE LOCAL ---
+import streamlit as st
+import osmnx as ox
+import geopandas as gpd
+import pandas as pd
+import folium
+from streamlit_folium import st_folium
 
-if st.session_state.commune_validee:
-    gdf_brut = charger_tous_vestiges_osm(st.session_state.commune_validee)
+# --- INITIALISATION SÉCURISÉE (C'est ce qui manquait) ---
+if "commune_validee" not in st.session_state:
+    st.session_state.commune_validee = "Turenne"
+
+# Configuration des limites de l'API Overpass
+ox.settings.timeout = 180  
+ox.settings.use_cache = True
+
+st.set_page_config(page_title="Radar de Patrimoine Isolé", layout="wide")
+st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
+
+# --- FONCTIONS ---
+@st.cache_data(show_spinner="Extraction des données...")
+def charger_tous_vestiges_osm(commune):
+    tags = {"historic": ["ruins", "castle", "fortress", "archaeological_site", "monument", "memorial"]}
+    try:
+        gdf = ox.features_from_address(commune, tags=tags, dist=10000)
+        if gdf.empty: return None
+        gdf['geometry'] = gdf.geometry.centroid
+        return gdf[['geometry', 'historic', 'name', 'note', 'description']]
+    except: return None
+
+@st.cache_data(show_spinner="Analyse des bâtiments...")
+def charger_batiments_osm(commune):
+    try:
+        gdf = ox.features_from_address(commune, tags={"building": True}, dist=10000)
+        return gdf[['geometry']] if not gdf.empty else None
+    except: return None
+
+# --- SIDEBAR ---
+st.sidebar.header("1. Zone géographique")
+with st.sidebar.form("form_commune"):
+    nom_commune = st.text_input("Nom de la commune :", value=st.session_state.commune_validee)
+    if st.form_submit_button("Lancer le scan 🚀"):
+        st.session_state.commune_validee = nom_commune
+        st.rerun()
+
+st.sidebar.markdown("---")
+st.sidebar.header("2. Filtres")
+rayon_isolement = st.sidebar.slider("Rayon d'isolement (m) :", 0, 2000, 300, 50)
+choix_ruines = st.sidebar.checkbox("Ruines", True)
+choix_chateaux = st.sidebar.checkbox("Châteaux", True)
+choix_archeo = st.sidebar.checkbox("Archéo", True)
+choix_monuments = st.sidebar.checkbox("Monuments", False)
+
+# --- TRAITEMENT ---
+gdf_brut = charger_tous_vestiges_osm(st.session_state.commune_validee)
+
+if gdf_brut is not None:
+    tags_actifs = []
+    if choix_ruines: tags_actifs.append("ruins")
+    if choix_chateaux: tags_actifs.extend(["castle", "fortress"])
+    if choix_archeo: tags_actifs.append("archaeological_site")
+    if choix_monuments: tags_actifs.extend(["monument", "memorial"])
     
-    if gdf_brut is not None and not gdf_brut.empty:
-        tags_actifs = []
-        if choix_ruines: tags_actifs.append("ruins")
-        if choix_chateaux: tags_actifs.extend(["castle", "fortress"])
-        if choix_archeo: tags_actifs.append("archaeological_site")
-        if choix_monuments: tags_actifs.extend(["monument", "memorial"])
+    gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_actifs)]
+    
+    if not gdf_final.empty:
+        df_affichage = pd.DataFrame(gdf_final.drop(columns='geometry'))
+        zone_carte = st.empty()
+        st.markdown("---")
+        st.subheader("📋 Résultats")
         
-        gdf_filtre_type = gdf_brut[gdf_brut['historic'].isin(tags_actifs)]
+        evenement_clic = st.dataframe(df_affichage, selection_mode="single-row", on_select="rerun", use_container_width=True)
         
-        if not gdf_filtre_type.empty:
-            utm_crs = gdf_filtre_type.estimate_utm_crs()
-            gdf_proj = gdf_filtre_type.to_crs(utm_crs)
+        # Logique de centrage carte
+        center = [gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()]
+        zoom = 12
+        id_sel = None
+        
+        if evenement_clic and evenement_clic.selection.rows:
+            sel = gdf_final.iloc[evenement_clic.selection.rows[0]]
+            center = [sel.geometry.y, sel.geometry.x]
+            zoom = 16
+            id_sel = sel.name
             
-            if rayon_isolement > 0:
-                gdf_batiments = charger_batiments_osm(st.session_state.commune_validee)
-                if gdf_batiments is not None and not gdf_batiments.empty:
-                    gdf_batiments_proj = gdf_batiments.to_crs(utm_crs)
-                    sindex_bats = gdf_batiments_proj.sindex
-                    def verifier_isolement(point, index, gdf_bats, rayon):
-                        bbox = point.buffer(rayon)
-                        match_idx = index.query(bbox, predicate="intersects")
-                        if len(match_idx) == 0: return True
-                        candidats = gdf_bats.iloc[match_idx]
-                        return candidats.distance(point).min() >= rayon
-                    mask_isole = gdf_proj.geometry.apply(lambda pt: verifier_isolement(pt, sindex_bats, gdf_batiments_proj, rayon_isolement))
-                    gdf_filtre_spatial_proj = gdf_proj[mask_isole]
-                else:
-                    gdf_filtre_spatial_proj = gdf_proj
-            else:
-                gdf_filtre_spatial_proj = gdf_proj
-            
-            gdf_final = gdf_filtre_spatial_proj.to_crs(epsg=4326)
-            
-            df_affichage = pd.DataFrame(gdf_final.drop(columns='geometry'))
-            
-            if not gdf_final.empty:
-                center_y = gdf_final.geometry.y.mean()
-                center_x = gdf_final.geometry.x.mean()
-                zoom_carte = 12
-            else:
-                center_y, center_x, zoom_carte = 46.0, 2.0, 6
-                
-            id_selectionne = None
-            
-            zone_carte = st.empty()
-            st.markdown("---")
-            st.subheader("📋 Données détaillées des résultats")
-            
-            evenement_clic = st.dataframe(
-                df_affichage, 
-                selection_mode="single-row", 
-                on_select="rerun", 
-                use_container_width=True
-            )
-            
-            if evenement_clic and evenement_clic.selection.rows:
-                index_ligne_selectionnee = evenement_clic.selection.rows[0]
-                entite_cible = gdf_final.iloc[index_ligne_selectionnee]
-                center_y = entite_cible.geometry.y
-                center_x = entite_cible.geometry.x
-                zoom_carte = 16  
-                id_selectionne = entite_cible.name 
-
-            with zone_carte.container():
-                st.subheader(f"📍 {len(gdf_final)} élément(s) historique(s) repéré(s)")
-                m = folium.Map(location=[center_y, center_x], zoom_start=zoom_carte)
-                folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Satellite').add_to(m)
-                
-                for idx, row in gdf_final.iterrows():
-                    ligne_cliquee = (idx == id_selectionne)
-                    folium.Marker(
-                        location=[row.geometry.y, row.geometry.x],
-                        icon=folium.Icon(color="green" if ligne_cliquee else "red", icon="star" if ligne_cliquee else "landmark", prefix="fa")
-                    ).add_to(m)
-                st_folium(m, width=None, height=650)
-        else:
-            st.warning("Aucun résultat ne correspond aux filtres.")
+        with zone_carte.container():
+            m = folium.Map(location=center, zoom_start=zoom)
+            folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri').add_to(m)
+            for idx, row in gdf_final.iterrows():
+                is_sel = (idx == id_sel)
+                folium.Marker([row.geometry.y, row.geometry.x], 
+                             icon=folium.Icon(color="green" if is_sel else "red", icon="star" if is_sel else "landmark", prefix="fa")).add_to(m)
+            st_folium(m, width=None, height=650)
     else:
-        st.error("Aucune donnée trouvée. Relancez le scan.")
+        st.warning("Aucun résultat.")
+else:
+    st.info("Entrez une commune et cliquez sur Scan.")
