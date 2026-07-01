@@ -17,8 +17,16 @@ ox.settings.use_cache = True
 st.set_page_config(page_title="Radar de Patrimoine", layout="wide")
 st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
 
+# --- CONTRÔLE PERMANENT DE LA VUE ---
+st.session_state.layer_type = st.radio(
+    "Choisir la vue :", 
+    ["Satellite", "Carte"], 
+    index=0 if st.session_state.layer_type == "Satellite" else 1,
+    horizontal=True
+)
+
 # --- FONCTIONS ---
-@st.cache_data(show_spinner="Extraction en cours...")
+@st.cache_data(show_spinner="Extraction des données...")
 def charger_donnees(commune):
     tags = {"historic": ["ruins", "castle", "fortress", "archaeological_site", "monument", "memorial"]}
     try:
@@ -54,13 +62,10 @@ if gdf_brut is not None:
     gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_sel)]
     
     if not gdf_final.empty:
-        # Contrôle permanent du type de vue
-        st.session_state.layer_type = st.radio("Type de vue :", ["Satellite", "Carte"], horizontal=True)
-        
         if st.session_state.map_center == [45.0, 1.5]:
             st.session_state.map_center = [gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()]
             
-        # Définition des tuiles basées sur le choix radio
+        # Définition des tuiles selon le choix radio
         tiles = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' if st.session_state.layer_type == "Satellite" else 'openstreetmap'
         attr = 'Esri World Imagery' if st.session_state.layer_type == "Satellite" else 'OpenStreetMap'
         
