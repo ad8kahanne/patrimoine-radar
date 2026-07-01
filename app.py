@@ -13,115 +13,101 @@ st.set_page_config(page_title="Radar de Patrimoine Isolé", layout="wide")
 
 st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
 
-# Initialisation des variables d'état pour le maintien de l'affichage
-if "scan_lance" not in st.session_state:
-    st.session_state.scan_lance = False
+# Initialisation de la commune par défaut dans l'état de la session
+if "commune_validee" not in st.session_state:
+    st.session_state.commune_validee = "Turenne"
 
-# --- BARRE LATÉRALE : FORMULAIRE DE RECHERCHE ---
-with st.sidebar.form("formulaire_recherche"):
-    st.header("Paramètres")
-    
+# --- BARRE LATÉRALE ---
+
+st.sidebar.header("1. Zone géographique")
+# Le formulaire ne contient PLUS QUE la commune pour éviter les requêtes API intempestives
+with st.sidebar.form("formulaire_commune"):
     nom_commune = st.text_input(
         "Nom de la commune :", 
-        value="Turenne"
+        value=st.session_state.commune_validee
     )
-    
-    rayon_recherche_km = st.slider(
-        "Rayon de recherche global (km) :",
-        min_value=1,
-        max_value=25,
-        value=10,
-        help="Distance de scan autour du centre de la commune pour intégrer les communes aux alentours."
-    )
-    
-    rayon_isolement = st.slider(
-        "Rayon d'isolement minimum (mètres) :",
-        min_value=0,
-        max_value=2000,
-        value=300,
-        step=50,
-        help="Distance minimale par rapport à un bâtiment moderne. À 0, le filtre est coupé."
-    )
-    
-    st.markdown("---")
-    st.write("**Types de recherche (historic=*) :**")
-    
-    choix_ruines = st.checkbox("Ruines (ruins)", value=True)
-    choix_chateaux = st.checkbox("Châteaux & Forteresses (castle, fortress)", value=True)
-    choix_archeo = st.checkbox("Sites archéologiques (archaeological_site)", value=True)
-    choix_monuments = st.checkbox("Monuments & Mémoriaux (monument, memorial)", value=False)
-    
     bouton_scan = st.form_submit_button("Lancer le scan 🚀")
+    if bouton_scan:
+        st.session_state.commune_validee = nom_commune
 
-# Enregistrement des configurations lors de la soumission
-if bouton_scan:
-    st.session_state.nom_commune = nom_commune
-    st.session_state.rayon_recherche_m = rayon_recherche_km * 1000  # Conversion en mètres pour l'API
-    st.session_state.rayon_isolement = rayon_isolement
-    st.session_state.choix_ruines = choix_ruines
-    st.session_state.choix_chateaux = choix_chateaux
-    st.session_state.choix_archeo = choix_archeo
-    st.session_state.choix_monuments = choix_monuments
-    st.session_state.scan_lance = True
+st.sidebar.markdown("---")
+st.sidebar.header("2. Filtres d'affichage en temps réel")
 
-# --- FONCTIONS D'EXTRACTION PAR ADRESSE + RAYON ---
-@st.cache_data(show_spinner="Extraction des données historiques (commune + alentours)...")
-def charger_vestiges_alentours(commune, rayon_metres, tags_selectionnes):
-    if not tags_selectionnes:
-        return None
-    tags = {"historic": tags_selectionnes}
+# Placer ces éléments HORS du formulaire permet une réactivité instantanée sur la carte
+rayon_isolement = st.sidebar.slider(
+    "Rayon d'isolement minimum (mètres) :",
+    min_value=0,
+    max_value=2000,
+    value=300,
+    step=50,
+    help="Distance minimale par rapport à un bâtiment moderne. À 0, le filtre est désactivé."
+)
+
+st.sidebar.write("**Types de vestiges à afficher :**")
+choix_ruines = st.sidebar.checkbox("Ruines (ruins)", value=True)
+choix_chateaux = st.sidebar.checkbox("Châteaux & Forteresses (castle, fortress)", value=True)
+choix_archeo = st.sidebar.checkbox("Sites archéologiques (archaeological_site)", value=True)
+choix_monuments = st.sidebar.checkbox("Monuments & Mémoriaux (monument, memorial)", value=False)
+
+
+# --- FONCTIONS D'EXTRACTION (TÉLÉCHARGEMENT GLOBAL CACHÉ) ---
+
+@st.cache_data(show_spinner="Extraction de l'ensemble des données historiques (10km)...")
+def charger_tous_vestiges_osm(commune):
+    # On télécharge toutes les catégories d'un coup pour pouvoir basculer de l'une à l'autre instantanément
+    toutes_categories = ["ruins", "castle", "fortress", "archaeological_site", "monument", "memorial"]
+    tags = {"historic": toutes_categories}
     try:
-        # Utilisation de features_from_address pour éclater les barrières de la commune
-        gdf = ox.features_from_address(commune, tags=tags, dist=rayon_metres)
+        gdf = ox.features_from_address(commune, tags=tags, dist=10000)
         if gdf.empty:
             return None
         
-        # Maintien de la correction des polygones/formes en points (centroïdes)
+        # Transformation des polygones en points centraux
         gdf_points = gdf.copy()
         gdf_points['geometry'] = gdf_points.geometry.centroid
         
         colonnes_cibles = ['geometry', 'historic', 'name', 'note', 'description']
         colonnes_existantes = [col for col in colonnes_cibles if col in gdf_points.columns]
         return gdf_points[colonnes_existantes]
-    except Exception as e:
+    except Exception:
         return None
 
-@st.cache_data(show_spinner="Analyse de la zone urbaine étendue...")
-def charger_batiments_alentours(commune, rayon_metres):
+@st.cache_data(show_spinner="Analyse des structures modernes environnantes...")
+def charger_batiments_osm(commune):
     tags = {"building": True}
     try:
-        gdf = ox.features_from_address(commune, tags=tags, dist=rayon_metres)
+        gdf = ox.features_from_address(commune, tags=tags, dist=10000)
         if gdf.empty:
             return None
         return gdf[['geometry']]
-    except Exception as e:
+    except Exception:
         return None
 
-# --- EXÉCUTION ---
-if st.session_state.scan_lance:
+
+# --- TRAITEMENT ET FILTRAGE LOCAL ---
+
+if st.session_state.commune_validee:
+    # 1. Récupération brute de la base de données OSM indexée pour cette commune
+    gdf_brut = charger_tous_vestiges_osm(st.session_state.commune_validee)
     
-    tags_osm = []
-    if st.session_state.choix_ruines: tags_osm.append("ruins")
-    if st.session_state.choix_chateaux: tags_osm.extend(["castle", "fortress"])
-    if st.session_state.choix_archeo: tags_osm.append("archaeological_site")
-    if st.session_state.choix_monuments: tags_osm.extend(["monument", "memorial"])
-    
-    if not tags_osm:
-        st.error("Sélectionne au moins un type de vestige à chercher dans la barre latérale.")
-    else:
-        gdf_vestiges = charger_vestiges_alentours(
-            st.session_state.nom_commune, 
-            st.session_state.rayon_recherche_m, 
-            tags_osm
-        )
+    if gdf_brut is not None and not gdf_brut.empty:
         
-        if gdf_vestiges is not None and not gdf_vestiges.empty:
-            utm_crs = gdf_vestiges.estimate_utm_crs()
-            gdf_vestiges_proj = gdf_vestiges.to_crs(utm_crs)
+        # 2. Filtrage par type (Calcul local instantané basé sur les cases à cocher)
+        tags_actifs = []
+        if choix_ruines: tags_actifs.append("ruins")
+        if choix_chateaux: tags_actifs.extend(["castle", "fortress"])
+        if choix_archeo: tags_actifs.append("archaeological_site")
+        if choix_monuments: tags_actifs.extend(["monument", "memorial"])
+        
+        gdf_filtre_type = gdf_brut[gdf_brut['historic'].isin(tags_actifs)]
+        
+        if not gdf_filtre_type.empty:
+            utm_crs = gdf_filtre_type.estimate_utm_crs()
+            gdf_proj = gdf_filtre_type.to_crs(utm_crs)
             
-            # Application du filtre d'isolement si le rayon > 0
-            if st.session_state.rayon_isolement > 0:
-                gdf_batiments = charger_batiments_alentours(st.session_state.nom_commune, st.session_state.rayon_recherche_m)
+            # 3. Filtrage par isolement spatial (si supérieur à 0)
+            if rayon_isolement > 0:
+                gdf_batiments = charger_batiments_osm(st.session_state.commune_validee)
                 
                 if gdf_batiments is not None and not gdf_batiments.empty:
                     gdf_batiments_proj = gdf_batiments.to_crs(utm_crs)
@@ -135,66 +121,101 @@ if st.session_state.scan_lance:
                         candidats = gdf_bats.iloc[match_idx]
                         return candidats.distance(point).min() >= rayon
 
-                    mask_isole = gdf_vestiges_proj.geometry.apply(
-                        lambda pt: verifier_isolement(pt, sindex_bats, gdf_batiments_proj, st.session_state.rayon_isolement)
+                    mask_isole = gdf_proj.geometry.apply(
+                        lambda pt: verifier_isolement(pt, sindex_bats, gdf_batiments_proj, rayon_isolement)
                     )
-                    gdf_filtre_proj = gdf_vestiges_proj[mask_isole]
+                    gdf_filtre_spatial_proj = gdf_proj[mask_isole]
                 else:
-                    gdf_filtre_proj = gdf_vestiges_proj
+                    gdf_filtre_spatial_proj = gdf_proj
             else:
-                # Économie de calcul : si rayon d'isolement à 0, pas de chargement des bâtiments
-                gdf_filtre_proj = gdf_vestiges_proj
+                gdf_filtre_spatial_proj = gdf_proj
             
-            gdf_final = gdf_filtre_proj.to_crs(epsg=4326)
+            # Reprojection finale en coordonnées géographiques standards
+            gdf_final = gdf_filtre_spatial_proj.to_crs(epsg=4326)
             
-            # --- RENDU DE L'INTERFACE ---
-            st.subheader(f"📍 {len(gdf_final)} élément(s) historique(s) repéré(s) (Zone élargie)")
+            # --- GESTION DE LA SÉLECTION DANS LE TABLEAU ---
+            df_affichage = pd.DataFrame(gdf_final.drop(columns='geometry'))
             
+            # Coordonnées d'affichage par défaut (centre moyen des points trouvés)
             if not gdf_final.empty:
                 center_y = gdf_final.geometry.y.mean()
                 center_x = gdf_final.geometry.x.mean()
-                
-                m = folium.Map(location=[center_y, center_x], zoom_start=12)
-                
-                # Fond satellite Esri
-                folium.TileLayer(
-                    tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                    attr='Esri World Imagery',
-                    name='Vue Satellite',
-                    overlay=False
-                ).add_to(m)
-                folium.LayerControl().add_to(m)
-                
-                for idx, row in gdf_final.iterrows():
-                    nom = row['name'] if ('name' in row and pd.notna(row['name'])) else "Patrimoine non nommé"
-                    type_h = row['historic'] if ('historic' in row and pd.notna(row['historic'])) else "Indéterminé"
-                    
-                    popup_html = f"<b>{nom}</b><br>Type : {type_h}"
-                    
-                    folium.Marker(
-                        location=[row.geometry.y, row.geometry.x],
-                        popup=folium.Popup(popup_html, max_width=250),
-                        icon=folium.Icon(color="red", icon="landmark", prefix="fa")
-                    ).add_to(m)
-                    
-                    if st.session_state.rayon_isolement > 0:
-                        folium.Circle(
-                            location=[row.geometry.y, row.geometry.x],
-                            radius=st.session_state.rayon_isolement,
-                            color="#1f77b4",
-                            fill=True,
-                            fill_opacity=0.05,
-                            weight=1
-                        ).add_to(m)
-                
-                st_folium(m, width=None, height=650, returned_objects=[])
-                
-                # Tableau récapitulatif
-                st.markdown("---")
-                st.subheader("📋 Données détaillées des résultats")
-                df_affichage = pd.DataFrame(gdf_final.drop(columns='geometry'))
-                st.dataframe(df_affichage, use_container_width=True)
+                zoom_carte = 12
             else:
-                st.warning("Aucun vestige trouvé avec ce niveau d'isolement. Essaye de réduire le rayon d'isolement en mètres.")
+                center_y, center_x, zoom_carte = 46.0, 2.0, 6
+                
+            id_selectionne = None
+            
+            # Pour conserver la carte en haut et le tableau en bas dans l'ordre visuel tout en capturant 
+            # la sélection du tableau avant le rendu de la carte, on utilise des placeholders st.empty()
+            zone_carte = st.empty()
+            st.markdown("---")
+            st.subheader("📋 Données détaillées des résultats")
+            
+            # Affichage du tableau interactif avec écoute du clic de ligne
+            evenement_clic = st.dataframe(
+                df_affichage, 
+                selection_mode="single_row", 
+                on_select="rerun", 
+                use_container_width=True
+            )
+            
+            # Analyse de la ligne sélectionnée pour modifier la carte en conséquence
+            if evenement_clic and evenement_clic.selection.rows:
+                index_ligne_selectionnee = evenement_clic.selection.rows[0]
+                entite_cible = gdf_final.iloc[index_ligne_selectionnee]
+                center_y = entite_cible.geometry.y
+                center_x = entite_cible.geometry.x
+                zoom_carte = 16  # Zoom ciblé puissant sur l'élément sélectionné
+                id_selectionne = entite_cible.name  # Stockage de l'ID OSM de la ligne
+
+            # --- RENDU DE LA CARTE (DANS LA ZONE DU HAUT) ---
+            with zone_carte.container():
+                st.subheader(f"📍 {len(gdf_final)} élément(s) historique(s) repéré(s)")
+                
+                if not gdf_final.empty:
+                    m = folium.Map(location=[center_y, center_x], zoom_start=zoom_carte)
+                    
+                    # Fond satellite Esri
+                    folium.TileLayer(
+                        tiles='https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                        attr='Esri World Imagery',
+                        name='Vue Satellite',
+                        overlay=False
+                    ).add_to(m)
+                    folium.LayerControl().add_to(m)
+                    
+                    # Génération dynamique des marqueurs
+                    for idx, row in gdf_final.iterrows():
+                        nom = row['name'] if ('name' in row and pd.notna(row['name'])) else "Patrimoine non nommé"
+                        type_h = row['historic'] if ('historic' in row and pd.notna(row['historic'])) else "Indéterminé"
+                        popup_html = f"<b>{nom}</b><br>Type : {type_h}"
+                        
+                        # Changement d'aspect visuel si la ligne du tableau correspond à ce point precise
+                        ligne_cliquee = (idx == id_selectionne)
+                        couleur_marqueur = "green" if ligne_cliquee else "red"
+                        icone_style = "star" if ligne_cliquee else "landmark"
+                        
+                        folium.Marker(
+                            location=[row.geometry.y, row.geometry.x],
+                            popup=folium.Popup(popup_html, max_width=250),
+                            icon=folium.Icon(color=couleur_marqueur, icon=icone_style, prefix="fa")
+                        ).add_to(m)
+                        
+                        if rayon_isolement > 0:
+                            folium.Circle(
+                                location=[row.geometry.y, row.geometry.x],
+                                radius=rayon_isolement,
+                                color="#28a745" if ligne_cliquee else "#1f77b4",
+                                fill=True,
+                                fill_opacity=0.08 if ligne_cliquee else 0.04,
+                                weight=2 if ligne_cliquee else 1
+                            ).add_to(m)
+                    
+                    st_folium(m, width=None, height=650, returned_objects=[])
+                else:
+                    st.warning("Aucun élément ne correspond aux filtres ou à la distance d'isolement.")
         else:
-            st.error("Aucun résultat trouvé sur cette zone géographique pour les catégories cochées.")
+            st.warning("Aucun résultat ne correspond aux catégories cochées.")
+    else:
+        st.error("Aucune donnée disponible. Lancez le scan initial via le bouton dédié.")
