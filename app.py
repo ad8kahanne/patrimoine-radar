@@ -5,81 +5,78 @@ import pandas as pd
 import folium
 from streamlit_folium import st_folium
 
-# --- CONFIGURATION & INITIALISATION ---
+# --- CONFIGURATION INITIALE ---
 if "commune_validee" not in st.session_state:
     st.session_state.commune_validee = "Turenne"
 
 ox.settings.timeout = 180  
 ox.settings.use_cache = True
 
-st.set_page_config(page_title="Radar de Patrimoine Isolé", layout="wide")
+st.set_page_config(page_title="Radar de Patrimoine", layout="wide")
 st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
 
 # --- FONCTIONS ---
-@st.cache_data(show_spinner="Extraction des données (10km)...")
-def charger_tous_vestiges_osm(commune):
+@st.cache_data(show_spinner="Extraction en cours...")
+def charger_donnees(commune):
     tags = {"historic": ["ruins", "castle", "fortress", "archaeological_site", "monument", "memorial"]}
     try:
         gdf = ox.features_from_address(commune, tags=tags, dist=10000)
         if gdf.empty: return None
         gdf['geometry'] = gdf.geometry.centroid
-        return gdf[['geometry', 'historic', 'name', 'note', 'description']]
-    except Exception as e:
-        st.error(f"Erreur lors de l'extraction : {e}")
-        return None
+        # Sélection flexible des colonnes pour éviter l'erreur "not in index"
+        cols = [c for c in ['geometry', 'historic', 'name', 'note', 'description'] if c in gdf.columns]
+        return gdf[cols]
+    except: return None
 
-# --- SIDEBAR (SANS FORMULAIRE POUR PLUS DE RÉACTIVITÉ) ---
-st.sidebar.header("1. Zone géographique")
-nom_commune = st.sidebar.text_input("Nom de la commune :", value=st.session_state.commune_validee)
-
-# Bouton simple : déclenche le recalcul immédiat
+# --- SIDEBAR ---
+nom_commune = st.sidebar.text_input("Commune :", value=st.session_state.commune_validee)
 if st.sidebar.button("Lancer le scan 🚀"):
     st.session_state.commune_validee = nom_commune
     st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.header("2. Filtres")
-rayon_isolement = st.sidebar.slider("Rayon d'isolement (m) :", 0, 2000, 300, 50)
-choix_ruines = st.sidebar.checkbox("Ruines", True)
-choix_chateaux = st.sidebar.checkbox("Châteaux", True)
-choix_archeo = st.sidebar.checkbox("Archéo", True)
-choix_monuments = st.sidebar.checkbox("Monuments", False)
+rayon = st.sidebar.slider("Rayon d'isolement (m) :", 0, 2000, 300, 50)
+c_ruines = st.sidebar.checkbox("Ruines", True)
+c_chateaux = st.sidebar.checkbox("Châteaux", True)
+c_archeo = st.sidebar.checkbox("Archéo", True)
+c_monu = st.sidebar.checkbox("Monuments", False)
 
 # --- TRAITEMENT ---
-gdf_brut = charger_tous_vestiges_osm(st.session_state.commune_validee)
+gdf_brut = charger_donnees(st.session_state.commune_validee)
 
 if gdf_brut is not None:
-    tags_actifs = []
-    if choix_ruines: tags_actifs.append("ruins")
-    if choix_chateaux: tags_actifs.extend(["castle", "fortress"])
-    if choix_archeo: tags_actifs.append("archaeological_site")
-    if choix_monuments: tags_actifs.extend(["monument", "memorial"])
+    tags_sel = []
+    if c_ruines: tags_sel.append("ruins")
+    if c_chateaux: tags_sel.extend(["castle", "fortress"])
+    if c_archeo: tags_sel.append("archaeological_site")
+    if c_monu: tags_sel.extend(["monument", "memorial"])
     
-    gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_actifs)]
+    gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_sel)]
     
     if not gdf_final.empty:
-        df_affichage = pd.DataFrame(gdf_final.drop(columns='geometry'))
+        df_display = pd.DataFrame(gdf_final.drop(columns='geometry'))
         
-        # Organisation : Carte en haut, Tableau en bas
+        # Zone carte
         zone_carte = st.empty()
         st.markdown("---")
-        st.subheader("📋 Données détaillées")
+        st.subheader("📋 Résultats")
         
-        evenement_clic = st.dataframe(df_affichage, selection_mode="single-row", on_select="rerun", use_container_width=True)
+        # Sélection de ligne
+        evenement = st.dataframe(df_display, selection_mode="single-row", on_select="rerun", use_container_width=True)
         
-        center = [gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()]
+        # Logique de centrage
+        y, x = gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()
         zoom = 12
         id_sel = None
         
-        if evenement_clic and evenement_clic.selection.rows:
-            sel = gdf_final.iloc[evenement_clic.selection.rows[0]]
-            center = [sel.geometry.y, sel.geometry.x]
+        if evenement and evenement.selection.rows:
+            sel = gdf_final.iloc[evenement.selection.rows[0]]
+            y, x = sel.geometry.y, sel.geometry.x
             zoom = 16
             id_sel = sel.name
             
         with zone_carte.container():
-            st.subheader(f"📍 {len(gdf_final)} élément(s) trouvé(s)")
-            m = folium.Map(location=center, zoom_start=zoom)
+            m = folium.Map(location=[y, x], zoom_start=zoom)
             folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri').add_to(m)
             for idx, row in gdf_final.iterrows():
                 is_sel = (idx == id_sel)
@@ -87,6 +84,6 @@ if gdf_brut is not None:
                              icon=folium.Icon(color="green" if is_sel else "red", icon="star" if is_sel else "landmark", prefix="fa")).add_to(m)
             st_folium(m, width=None, height=650)
     else:
-        st.warning("Aucun résultat pour cette sélection.")
+        st.warning("Aucun résultat.")
 else:
     st.info("Entrez une commune et cliquez sur Scan.")
