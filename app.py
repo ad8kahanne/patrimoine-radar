@@ -17,10 +17,10 @@ ox.settings.use_cache = True
 st.set_page_config(page_title="Radar de Patrimoine", layout="wide")
 st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
 
-# --- CONTRÔLE VUE ---
+# --- CONTRÔLE VUE (AJOUT CADASTRE) ---
 st.session_state.layer_type = st.radio(
-    "Choisir la vue :", ["Satellite", "Carte"], 
-    index=0 if st.session_state.layer_type == "Satellite" else 1,
+    "Choisir la vue :", ["Satellite", "Carte", "Cadastre"], 
+    index=["Satellite", "Carte", "Cadastre"].index(st.session_state.layer_type),
     horizontal=True
 )
 
@@ -61,12 +61,17 @@ if gdf_brut is not None:
         if st.session_state.map_center == [45.0, 1.5]:
             st.session_state.map_center = [gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()]
             
-        tiles = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' if st.session_state.layer_type == "Satellite" else 'openstreetmap'
-        attr = 'Esri' if st.session_state.layer_type == "Satellite" else 'OpenStreetMap'
+        # Logique de tuiles
+        if st.session_state.layer_type == "Satellite":
+            tiles, attr = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Esri'
+        elif st.session_state.layer_type == "Cadastre":
+            # WMS du cadastre français
+            tiles, attr = 'https://wxs.ign.fr/an7nvfzojv5wa96dsga5nk8w/geoportail/wmts?service=WMTS&request=GetTile&version=1.0.0&layer=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&style=normal&format=image/png&tilematrixSet=PM&tilematrix={z}&tilerow={y}&tilecol={x}', 'IGN'
+        else:
+            tiles, attr = 'openstreetmap', 'OpenStreetMap'
         
         m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=tiles, attr=attr)
         
-        # AJOUT DES POPUPS DYNAMIQUES ICI
         for idx, row in gdf_final.iterrows():
             popup_text = f"<b>{row.get('name', 'Vestige sans nom')}</b><br>Type: {row.get('historic', 'N/A')}"
             folium.Marker(
