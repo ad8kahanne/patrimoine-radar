@@ -58,7 +58,9 @@ if gdf_brut is not None:
     gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_sel)]
     
     if not gdf_final.empty:
-        # Logique des tuiles
+        if st.session_state.map_center == [45.0, 1.5]:
+            st.session_state.map_center = [gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()]
+            
         if st.session_state.layer_type == "Satellite":
             tiles, attr = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Esri'
         elif st.session_state.layer_type == "Cadastre":
@@ -66,31 +68,29 @@ if gdf_brut is not None:
         else:
             tiles, attr = 'openstreetmap', 'OpenStreetMap'
         
-        # Création carte avec le centre courant
         m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=tiles, attr=attr)
         
         for idx, row in gdf_final.iterrows():
             popup_text = f"<b>{row.get('name', 'Vestige sans nom')}</b><br>Type: {row.get('historic', 'N/A')}"
             folium.Marker([row.geometry.y, row.geometry.x], popup=folium.Popup(popup_text, max_width=200), icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
         
-        # Capture de la carte et mise à jour de l'état si l'utilisateur bouge
-        output = st_folium(m, width=None, height=500)
+        # Capture SANS RERUN AUTOMATIQUE
+        output = st_folium(m, width=None, height=500, returned_objects=["center", "zoom"])
         
+        # Mise à jour des états uniquement si l'utilisateur interagit réellement
         if output and output.get("center"):
             st.session_state.map_center = [output["center"]["lat"], output["center"]["lng"]]
             st.session_state.map_zoom = output["zoom"]
         
         st.markdown("---")
         st.subheader("📋 Résultats")
-        df_display = pd.DataFrame(gdf_final.drop(columns='geometry'))
-        
-        evenement = st.dataframe(df_display, selection_mode="single-row", on_select="rerun", use_container_width=True)
+        evenement = st.dataframe(pd.DataFrame(gdf_final.drop(columns='geometry')), selection_mode="single-row", on_select="rerun", use_container_width=True)
         
         if evenement and evenement.selection.rows:
             sel = gdf_final.iloc[evenement.selection.rows[0]]
             st.session_state.map_center = [sel.geometry.y, sel.geometry.x]
             st.session_state.map_zoom = 16
-            st.rerun()
+            st.rerun() # SEULEMENT ICI le rerun est justifié car on veut forcer le centrage
     else:
         st.warning("Aucun résultat.")
 else:
