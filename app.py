@@ -17,14 +17,12 @@ ox.settings.use_cache = True
 st.set_page_config(page_title="Radar de Patrimoine", layout="wide")
 st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
 
-# --- CONTRÔLE VUE ---
 st.session_state.layer_type = st.radio(
     "Choisir la vue :", ["Satellite", "Carte", "Cadastre"], 
     index=["Satellite", "Carte", "Cadastre"].index(st.session_state.layer_type),
     horizontal=True
 )
 
-# --- FONCTIONS ---
 @st.cache_data(show_spinner="Extraction des données...")
 def charger_donnees(commune):
     tags = {"historic": ["ruins", "castle", "fortress", "archaeological_site", "monument", "memorial"]}
@@ -36,7 +34,6 @@ def charger_donnees(commune):
         return gdf[cols]
     except: return None
 
-# --- SIDEBAR ---
 nom_commune = st.sidebar.text_input("Commune :", value=st.session_state.commune_validee)
 if st.sidebar.button("Lancer le scan 🚀"):
     st.session_state.commune_validee = nom_commune
@@ -45,7 +42,6 @@ if st.sidebar.button("Lancer le scan 🚀"):
 rayon = st.sidebar.slider("Rayon d'isolement (m) :", 0, 2000, 300, 50)
 c_ruines, c_chateaux, c_archeo, c_monu = st.sidebar.checkbox("Ruines", True), st.sidebar.checkbox("Châteaux", True), st.sidebar.checkbox("Archéo", True), st.sidebar.checkbox("Monuments", False)
 
-# --- TRAITEMENT ---
 gdf_brut = charger_donnees(st.session_state.commune_validee)
 
 if gdf_brut is not None:
@@ -71,16 +67,20 @@ if gdf_brut is not None:
         m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=tiles, attr=attr)
         
         for idx, row in gdf_final.iterrows():
-            popup_text = f"<b>{row.get('name', 'Vestige sans nom')}</b><br>Type: {row.get('historic', 'N/A')}"
-            folium.Marker([row.geometry.y, row.geometry.x], popup=folium.Popup(popup_text, max_width=200), icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
+            folium.Marker([row.geometry.y, row.geometry.x], 
+                          popup=folium.Popup(f"<b>{row.get('name', 'Vestige')}</b>", max_width=200),
+                          icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
         
-        # Capture SANS RERUN AUTOMATIQUE
+        # Capture optimisée : on ne stocke que si le changement est notable
         output = st_folium(m, width=None, height=500, returned_objects=["center", "zoom"])
         
-        # Mise à jour des états uniquement si l'utilisateur interagit réellement
         if output and output.get("center"):
-            st.session_state.map_center = [output["center"]["lat"], output["center"]["lng"]]
-            st.session_state.map_zoom = output["zoom"]
+            lat, lng = output["center"]["lat"], output["center"]["lng"]
+            zoom = output["zoom"]
+            # Seuil de tolérance pour éviter la boucle infinie sur les micro-mouvements
+            if abs(lat - st.session_state.map_center[0]) > 0.001 or abs(lng - st.session_state.map_center[1]) > 0.001 or zoom != st.session_state.map_zoom:
+                st.session_state.map_center = [lat, lng]
+                st.session_state.map_zoom = zoom
         
         st.markdown("---")
         st.subheader("📋 Résultats")
@@ -90,7 +90,7 @@ if gdf_brut is not None:
             sel = gdf_final.iloc[evenement.selection.rows[0]]
             st.session_state.map_center = [sel.geometry.y, sel.geometry.x]
             st.session_state.map_zoom = 16
-            st.rerun() # SEULEMENT ICI le rerun est justifié car on veut forcer le centrage
+            st.rerun()
     else:
         st.warning("Aucun résultat.")
 else:
