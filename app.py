@@ -17,10 +17,9 @@ ox.settings.use_cache = True
 st.set_page_config(page_title="Radar de Patrimoine", layout="wide")
 st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
 
-# --- CONTRÔLE PERMANENT DE LA VUE ---
+# --- CONTRÔLE VUE ---
 st.session_state.layer_type = st.radio(
-    "Choisir la vue :", 
-    ["Satellite", "Carte"], 
+    "Choisir la vue :", ["Satellite", "Carte"], 
     index=0 if st.session_state.layer_type == "Satellite" else 1,
     horizontal=True
 )
@@ -44,10 +43,7 @@ if st.sidebar.button("Lancer le scan 🚀"):
     st.rerun()
 
 rayon = st.sidebar.slider("Rayon d'isolement (m) :", 0, 2000, 300, 50)
-c_ruines = st.sidebar.checkbox("Ruines", True)
-c_chateaux = st.sidebar.checkbox("Châteaux", True)
-c_archeo = st.sidebar.checkbox("Archéo", True)
-c_monu = st.sidebar.checkbox("Monuments", False)
+c_ruines, c_chateaux, c_archeo, c_monu = st.sidebar.checkbox("Ruines", True), st.sidebar.checkbox("Châteaux", True), st.sidebar.checkbox("Archéo", True), st.sidebar.checkbox("Monuments", False)
 
 # --- TRAITEMENT ---
 gdf_brut = charger_donnees(st.session_state.commune_validee)
@@ -65,14 +61,19 @@ if gdf_brut is not None:
         if st.session_state.map_center == [45.0, 1.5]:
             st.session_state.map_center = [gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()]
             
-        # Définition des tuiles selon le choix radio
         tiles = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' if st.session_state.layer_type == "Satellite" else 'openstreetmap'
-        attr = 'Esri World Imagery' if st.session_state.layer_type == "Satellite" else 'OpenStreetMap'
+        attr = 'Esri' if st.session_state.layer_type == "Satellite" else 'OpenStreetMap'
         
         m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=tiles, attr=attr)
         
+        # AJOUT DES POPUPS DYNAMIQUES ICI
         for idx, row in gdf_final.iterrows():
-            folium.Marker([row.geometry.y, row.geometry.x], icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
+            popup_text = f"<b>{row.get('name', 'Vestige sans nom')}</b><br>Type: {row.get('historic', 'N/A')}"
+            folium.Marker(
+                [row.geometry.y, row.geometry.x], 
+                popup=folium.Popup(popup_text, max_width=200),
+                icon=folium.Icon(color="red", icon="landmark", prefix="fa")
+            ).add_to(m)
         
         st_folium(m, width=None, height=500)
         
@@ -87,7 +88,6 @@ if gdf_brut is not None:
             st.session_state.map_center = [sel.geometry.y, sel.geometry.x]
             st.session_state.map_zoom = 16
             st.rerun()
-            
     else:
         st.warning("Aucun résultat.")
 else:
