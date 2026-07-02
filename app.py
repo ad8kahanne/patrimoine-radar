@@ -58,29 +58,27 @@ if gdf_brut is not None:
     gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_sel)]
     
     if not gdf_final.empty:
-        if st.session_state.map_center == [45.0, 1.5]:
-            st.session_state.map_center = [gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()]
-            
-        # Logique des tuiles avec le service IGN public
+        # Logique des tuiles
         if st.session_state.layer_type == "Satellite":
             tiles, attr = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Esri'
         elif st.session_state.layer_type == "Cadastre":
-            # URL optimisée et publique du Plan Cadastral Express de l'IGN
             tiles, attr = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=normal&FORMAT=image/png&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}', 'IGN'
         else:
             tiles, attr = 'openstreetmap', 'OpenStreetMap'
         
+        # Création carte avec le centre courant
         m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=tiles, attr=attr)
         
         for idx, row in gdf_final.iterrows():
             popup_text = f"<b>{row.get('name', 'Vestige sans nom')}</b><br>Type: {row.get('historic', 'N/A')}"
-            folium.Marker(
-                [row.geometry.y, row.geometry.x], 
-                popup=folium.Popup(popup_text, max_width=200),
-                icon=folium.Icon(color="red", icon="landmark", prefix="fa")
-            ).add_to(m)
+            folium.Marker([row.geometry.y, row.geometry.x], popup=folium.Popup(popup_text, max_width=200), icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
         
-        st_folium(m, width=None, height=500)
+        # Capture de la carte et mise à jour de l'état si l'utilisateur bouge
+        output = st_folium(m, width=None, height=500)
+        
+        if output and output.get("center"):
+            st.session_state.map_center = [output["center"]["lat"], output["center"]["lng"]]
+            st.session_state.map_zoom = output["zoom"]
         
         st.markdown("---")
         st.subheader("📋 Résultats")
