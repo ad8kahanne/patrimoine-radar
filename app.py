@@ -17,12 +17,14 @@ ox.settings.use_cache = True
 st.set_page_config(page_title="Radar de Patrimoine", layout="wide")
 st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
 
+# --- CONTRÔLE VUE ---
 st.session_state.layer_type = st.radio(
     "Choisir la vue :", ["Satellite", "Carte", "Cadastre"], 
     index=["Satellite", "Carte", "Cadastre"].index(st.session_state.layer_type),
     horizontal=True
 )
 
+# --- FONCTIONS ---
 @st.cache_data(show_spinner="Extraction...")
 def charger_donnees(commune):
     tags = {"historic": ["ruins", "castle", "fortress", "archaeological_site", "monument", "memorial"]}
@@ -34,48 +36,63 @@ def charger_donnees(commune):
         return gdf[cols]
     except: return None
 
+# --- SIDEBAR (FILTRES RÉINTÉGRÉS) ---
 nom_commune = st.sidebar.text_input("Commune :", value=st.session_state.commune_validee)
 if st.sidebar.button("Lancer le scan 🚀"):
     st.session_state.commune_validee = nom_commune
     st.rerun()
 
+st.sidebar.markdown("---")
+st.sidebar.header("2. Filtres")
+c_ruines = st.sidebar.checkbox("Ruines", True)
+c_chateaux = st.sidebar.checkbox("Châteaux", True)
+c_archeo = st.sidebar.checkbox("Archéo", True)
+c_monu = st.sidebar.checkbox("Monuments", False)
+
+# --- TRAITEMENT ---
 gdf_brut = charger_donnees(st.session_state.commune_validee)
 
 if gdf_brut is not None:
-    # Création du conteneur fixe pour la carte
-    carte_container = st.container()
+    tags_sel = []
+    if c_ruines: tags_sel.append("ruins")
+    if c_chateaux: tags_sel.extend(["castle", "fortress"])
+    if c_archeo: tags_sel.append("archaeological_site")
+    if c_monu: tags_sel.extend(["monument", "memorial"])
     
-    # Logique de tuiles
-    if st.session_state.layer_type == "Satellite":
-        tiles, attr = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Esri'
-    elif st.session_state.layer_type == "Cadastre":
-        tiles, attr = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=normal&FORMAT=image/png&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}', 'IGN'
-    else:
-        tiles, attr = 'openstreetmap', 'OpenStreetMap'
+    gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_sel)]
     
-    m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=tiles, attr=attr)
-    
-    for idx, row in gdf_brut.iterrows():
-        folium.Marker([row.geometry.y, row.geometry.x], 
-                      popup=folium.Popup(f"<b>{row.get('name', 'Vestige')}</b>", max_width=200),
-                      icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
-    
-    with carte_container:
+    if not gdf_final.empty:
+        # Logique des tuiles
+        if st.session_state.layer_type == "Satellite":
+            tiles, attr = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Esri'
+        elif st.session_state.layer_type == "Cadastre":
+            tiles, attr = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=normal&FORMAT=image/png&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}', 'IGN'
+        else:
+            tiles, attr = 'openstreetmap', 'OpenStreetMap'
+        
+        m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=tiles, attr=attr)
+        
+        for idx, row in gdf_final.iterrows():
+            folium.Marker([row.geometry.y, row.geometry.x], 
+                          popup=folium.Popup(f"<b>{row.get('name', 'Vestige')}</b>", max_width=200),
+                          icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
+        
         output = st_folium(m, width=None, height=500, returned_objects=["center", "zoom"])
         
-    # Mise à jour silencieuse
-    if output and output.get("center"):
-        st.session_state.map_center = [output["center"]["lat"], output["center"]["lng"]]
-        st.session_state.map_zoom = output["zoom"]
-    
-    st.markdown("---")
-    st.subheader("📋 Résultats")
-    evenement = st.dataframe(pd.DataFrame(gdf_brut.drop(columns='geometry')), selection_mode="single-row", on_select="rerun", use_container_width=True)
-    
-    if evenement and evenement.selection.rows:
-        sel = gdf_brut.iloc[evenement.selection.rows[0]]
-        st.session_state.map_center = [sel.geometry.y, sel.geometry.x]
-        st.session_state.map_zoom = 16
-        st.rerun()
+        if output and output.get("center"):
+            st.session_state.map_center = [output["center"]["lat"], output["center"]["lng"]]
+            st.session_state.map_zoom = output["zoom"]
+        
+        st.markdown("---")
+        st.subheader("📋 Résultats")
+        evenement = st.dataframe(pd.DataFrame(gdf_final.drop(columns='geometry')), selection_mode="single-row", on_select="rerun", use_container_width=True)
+        
+        if evenement and evenement.selection.rows:
+            sel = gdf_final.iloc[evenement.selection.rows[0]]
+            st.session_state.map_center = [sel.geometry.y, sel.geometry.x]
+            st.session_state.map_zoom = 16
+            st.rerun()
+    else:
+        st.warning("Aucun résultat.")
 else:
     st.info("Entrez une commune et cliquez sur Scan.")
