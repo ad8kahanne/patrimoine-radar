@@ -17,14 +17,9 @@ ox.settings.use_cache = True
 st.set_page_config(page_title="Radar de Patrimoine", layout="wide")
 st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
 
-# --- CONTRÔLE VUE AVEC PERSISTANCE ---
-# On capture le changement d'état ici
-new_layer = st.radio(
-    "Choisir la vue :", ["Satellite", "Carte", "Cadastre"], 
-    index=["Satellite", "Carte", "Cadastre"].index(st.session_state.layer_type),
-    horizontal=True
-)
-
+# --- CONTRÔLE VUE ---
+# On force le rerun uniquement quand on change de fond de carte
+new_layer = st.radio("Choisir la vue :", ["Satellite", "Carte", "Cadastre"], index=["Satellite", "Carte", "Cadastre"].index(st.session_state.layer_type), horizontal=True)
 if new_layer != st.session_state.layer_type:
     st.session_state.layer_type = new_layer
     st.rerun()
@@ -53,6 +48,7 @@ c_chateaux = st.sidebar.checkbox("Châteaux", True)
 c_archeo = st.sidebar.checkbox("Archéo", True)
 c_monu = st.sidebar.checkbox("Monuments", False)
 
+# --- TRAITEMENT ---
 gdf_brut = charger_donnees(st.session_state.commune_validee)
 
 if gdf_brut is not None:
@@ -65,7 +61,7 @@ if gdf_brut is not None:
     gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_sel)]
     
     if not gdf_final.empty:
-        # Logique des tuiles
+        # Configuration tuiles
         if st.session_state.layer_type == "Satellite":
             tiles, attr = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Esri'
         elif st.session_state.layer_type == "Cadastre":
@@ -80,12 +76,8 @@ if gdf_brut is not None:
                           popup=folium.Popup(f"<b>{row.get('name', 'Vestige')}</b>", max_width=200),
                           icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
         
-        # Capture la position AVANT le rendu
-        output = st_folium(m, width=None, height=500, key="map_stable")
-        
-        if output and output.get("center"):
-            st.session_state.map_center = [output["center"]["lat"], output["center"]["lng"]]
-            st.session_state.map_zoom = output["zoom"]
+        # ICI : On ne récupère RIEN de la carte. Elle est décorative et stable.
+        st_folium(m, width=None, height=500, key="map_stable")
         
         st.markdown("---")
         st.subheader("📋 Résultats")
