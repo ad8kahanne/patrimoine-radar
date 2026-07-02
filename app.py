@@ -17,7 +17,7 @@ ox.settings.use_cache = True
 st.set_page_config(page_title="Radar de Patrimoine", layout="wide")
 st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
 
-# --- CONTRÔLE VUE (AJOUT CADASTRE) ---
+# --- CONTRÔLE VUE ---
 st.session_state.layer_type = st.radio(
     "Choisir la vue :", ["Satellite", "Carte", "Cadastre"], 
     index=["Satellite", "Carte", "Cadastre"].index(st.session_state.layer_type),
@@ -61,12 +61,12 @@ if gdf_brut is not None:
         if st.session_state.map_center == [45.0, 1.5]:
             st.session_state.map_center = [gdf_final.geometry.y.mean(), gdf_final.geometry.x.mean()]
             
-        # Logique de tuiles
+        # Logique des tuiles avec le service IGN public
         if st.session_state.layer_type == "Satellite":
             tiles, attr = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Esri'
         elif st.session_state.layer_type == "Cadastre":
-            # WMS du cadastre français
-            tiles, attr = 'https://wxs.ign.fr/an7nvfzojv5wa96dsga5nk8w/geoportail/wmts?service=WMTS&request=GetTile&version=1.0.0&layer=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&style=normal&format=image/png&tilematrixSet=PM&tilematrix={z}&tilerow={y}&tilecol={x}', 'IGN'
+            # URL optimisée et publique du Plan Cadastral Express de l'IGN
+            tiles, attr = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=normal&FORMAT=image/png&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}', 'IGN'
         else:
             tiles, attr = 'openstreetmap', 'OpenStreetMap'
         
