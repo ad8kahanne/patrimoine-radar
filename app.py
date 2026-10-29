@@ -6,7 +6,6 @@ from streamlit_folium import st_folium
 import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 import warnings
-import streamlit.components.v1 as components
 
 # --- CONFIGURATION & CACHE ---
 warnings.filterwarnings("ignore")
@@ -39,8 +38,6 @@ st.markdown("""
     .stProgress > div > div > div > div { background-color: #28a745; }
     </style>
 """, unsafe_allow_html=True)
-
-js_close_sidebar = "<script>parent.document.querySelector('button[kind=\"headerNoPadding\"]').click();</script>"
 
 st.title("🏡 Haven Radar")
 
@@ -94,34 +91,29 @@ if lancer_scan:
             st.session_state.sync_idx = 0
             st.session_state.last_res = None
             
-        components.html(js_close_sidebar, height=0, width=0)
         try:
             st.session_state.last_city = commune_in
             
             with st.status("Exécution du Scan géomatique...", expanded=True) as status:
-                p_bar = st.progress(10, text="1/3 - Localisation de la commune...")
+                p_bar = st.progress(20, text="1/2 - Téléchargement ciblé (Commune + marge de 200m)...")
                 
-                # Étape 1 : Géocodage de la commune unique
+                # Géocodage et zone unique avec buffer propre
                 base = ox.geocode_to_gdf(commune_in).to_crs(epsg=2154)
                 union_zone = base.geometry.union_all()
-                
-                p_bar.progress(50, text="2/3 - Téléchargement ciblé des bâtiments et routes...")
-                # Étape 2 : Zone = Commune + 200m de marge frontalière (sans charger les communes voisines)
                 bbox_m = union_zone.buffer(200)
                 bbox = gpd.GeoSeries([bbox_m], crs=2154).to_crs(epsg=4326).iloc[0]
                 
                 bat = ox.features_from_polygon(bbox, tags={'building': True})
                 routes = ox.features_from_polygon(bbox, tags={'highway': ['primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'trunk']})
                 
-                p_bar.progress(85, text="3/3 - Calculs géospatiaux (distances & isolation KNN)...")
-                # Étape 3 : Calculs mathématiques
+                p_bar.progress(70, text="2/2 - Calculs géospatiaux (distances & isolation KNN)...")
+                
                 bat = bat[bat.geometry.type.isin(['Polygon', 'MultiPolygon'])].copy().to_crs(epsg=2154)
                 routes = routes.to_crs(epsg=2154)
                 
                 routes_union = routes.geometry.union_all()
                 bat['d_route'] = bat.geometry.centroid.apply(lambda x: routes_union.distance(x))
                 
-                # Filtrage strict sur la commune d'origine (union_zone)
                 candidates = bat[bat.geometry.centroid.within(union_zone) & (bat['d_route'] >= dist_route_val)].copy()
                 
                 if not candidates.empty:
