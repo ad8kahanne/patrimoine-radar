@@ -7,7 +7,6 @@ import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 import warnings
 import streamlit.components.v1 as components
-import time
 
 # --- CONFIGURATION & CACHE ---
 warnings.filterwarnings("ignore")
