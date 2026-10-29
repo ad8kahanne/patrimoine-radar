@@ -1,94 +1,190 @@
 import streamlit as st
 import osmnx as ox
 import geopandas as gpd
-import pandas as pd
 import folium
 from streamlit_folium import st_folium
+import pandas as pd
+from sklearn.neighbors import NearestNeighbors
+import warnings
+import streamlit.components.v1 as components
+import time
 
-# --- CONFIGURATION INITIALE ---
-if "commune_validee" not in st.session_state: st.session_state.commune_validee = "Turenne"
-if "map_center" not in st.session_state: st.session_state.map_center = [45.0, 1.5]
-if "map_zoom" not in st.session_state: st.session_state.map_zoom = 12
-if "layer_type" not in st.session_state: st.session_state.layer_type = "Satellite"
+# --- CONFIGURATION & CACHE ---
+warnings.filterwarnings("ignore")
+st.set_page_config(page_title="HAVEN RADAR", layout="wide")
 
-ox.settings.timeout = 180  
 ox.settings.use_cache = True
+ox.settings.cache_folder = './cache'
+ox.settings.log_console = False
+ox.settings.overpass_endpoint = "https://overpass.openstreetmap.fr/api/interpreter"
+ox.settings.timeout = 300
 
-st.set_page_config(page_title="Radar de Patrimoine", layout="wide")
-st.title("🗺️ Détecteur de Vestiges & Patrimoine Isolé")
+# --- INITIALISATION ÉTATS ---
+if 'favs' not in st.session_state:
+    st.session_state.favs = {} 
+if 'map_center' not in st.session_state:
+    st.session_state.map_center = None
+if 'last_res' not in st.session_state:
+    st.session_state.last_res = None
+if 'zoom_level' not in st.session_state:
+    st.session_state.zoom_level = 13
+if 'sync_idx' not in st.session_state:
+    st.session_state.sync_idx = 0
+if 'last_city' not in st.session_state:
+    st.session_state.last_city = ""
 
-# --- CONTRÔLE VUE ---
-# On force le rerun uniquement quand on change de fond de carte
-new_layer = st.radio("Choisir la vue :", ["Satellite", "Carte", "Cadastre"], index=["Satellite", "Carte", "Cadastre"].index(st.session_state.layer_type), horizontal=True)
-if new_layer != st.session_state.layer_type:
-    st.session_state.layer_type = new_layer
-    st.rerun()
+# --- STYLE CSS ---
+st.markdown("""
+    <style>
+    div.stButton > button:first-child { background-color: #28a745; color: white; border-radius: 5px; font-weight: bold; }
+    .stProgress > div > div > div > div { background-color: #28a745; }
+    </style>
+""", unsafe_allow_html=True)
 
-# --- FONCTIONS ---
-@st.cache_data(show_spinner="Extraction...")
-def charger_donnees(commune):
-    tags = {"historic": ["ruins", "castle", "fortress", "archaeological_site", "monument", "memorial"]}
-    try:
-        gdf = ox.features_from_address(commune, tags=tags, dist=10000)
-        if gdf.empty: return None
-        gdf['geometry'] = gdf.geometry.centroid
-        cols = [c for c in ['geometry', 'historic', 'name', 'note', 'description'] if c in gdf.columns]
-        return gdf[cols]
-    except: return None
+js_close_sidebar = "<script>parent.document.querySelector('button[kind=\"headerNoPadding\"]').click();</script>"
 
-# --- SIDEBAR ---
-nom_commune = st.sidebar.text_input("Commune :", value=st.session_state.commune_validee)
-if st.sidebar.button("Lancer le scan 🚀"):
-    st.session_state.commune_validee = nom_commune
-    st.rerun()
+st.title("🏡 Haven Radar")
 
-st.sidebar.markdown("---")
-c_ruines = st.sidebar.checkbox("Ruines", True)
-c_chateaux = st.sidebar.checkbox("Châteaux", True)
-c_archeo = st.sidebar.checkbox("Archéo", True)
-c_monu = st.sidebar.checkbox("Monuments", False)
-
-# --- TRAITEMENT ---
-gdf_brut = charger_donnees(st.session_state.commune_validee)
-
-if gdf_brut is not None:
-    tags_sel = []
-    if c_ruines: tags_sel.append("ruins")
-    if c_chateaux: tags_sel.extend(["castle", "fortress"])
-    if c_archeo: tags_sel.append("archaeological_site")
-    if c_monu: tags_sel.extend(["monument", "memorial"])
+# --- BARRE LATÉRALE ---
+with st.sidebar:
+    st.header("Paramètres du Scan")
+    commune_in = st.text_input("Secteur :", placeholder="Commune...", key="city_input")
+    dist_route_val = st.slider("Distance Route (m) :", 30, 300, 70)
+    rayon_iso_val = st.slider("Rayon Isolement (m) :", 50, 600, 180)
+    taille_hameau_max = st.number_input("Voisins Max autorisés :", 1, 13, 2)
+    lancer_scan = st.button("Lancer le Scan", use_container_width=True)
     
-    gdf_final = gdf_brut[gdf_brut['historic'].isin(tags_sel)]
+    st.markdown("---")
+    st.subheader("⭐ Gestion Favoris")
+    if st.session_state.last_res is not None:
+        res_count = len(st.session_state.last_res)
+        col_sel, col_add = st.columns([2, 1])
+        with col_sel:
+            st.session_state.sync_idx = st.selectbox(
+                "Choisir #", 
+                range(res_count), 
+                index=min(st.session_state.sync_idx, res_count-1),
+                format_func=lambda x: f"Haven #{x+1}", 
+                label_visibility="collapsed"
+            )
+        with col_add:
+            if st.button("Ajouter"):
+                row = st.session_state.last_res.iloc[st.session_state.sync_idx]
+                st.session_state.favs[st.session_state.sync_idx+1] = (row.geometry.centroid.y, row.geometry.centroid.x)
     
-    if not gdf_final.empty:
-        # Configuration tuiles
-        if st.session_state.layer_type == "Satellite":
-            tiles, attr = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', 'Esri'
-        elif st.session_state.layer_type == "Cadastre":
-            tiles, attr = 'https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=CADASTRALPARCELS.PARCELLAIRE_EXPRESS&STYLE=normal&FORMAT=image/png&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}', 'IGN'
-        else:
-            tiles, attr = 'openstreetmap', 'OpenStreetMap'
-        
-        m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom, tiles=tiles, attr=attr)
-        
-        for idx, row in gdf_final.iterrows():
-            folium.Marker([row.geometry.y, row.geometry.x], 
-                          popup=folium.Popup(f"<b>{row.get('name', 'Vestige')}</b>", max_width=200),
-                          icon=folium.Icon(color="red", icon="landmark", prefix="fa")).add_to(m)
-        
-        # ICI : On ne récupère RIEN de la carte. Elle est décorative et stable.
-        st_folium(m, width=None, height=500, key="map_stable")
-        
-        st.markdown("---")
-        st.subheader("📋 Résultats")
-        evenement = st.dataframe(pd.DataFrame(gdf_final.drop(columns='geometry')), selection_mode="single-row", on_select="rerun", use_container_width=True)
-        
-        if evenement and evenement.selection.rows:
-            sel = gdf_final.iloc[evenement.selection.rows[0]]
-            st.session_state.map_center = [sel.geometry.y, sel.geometry.x]
-            st.session_state.map_zoom = 16
+    if st.session_state.favs:
+        st.write("📍 Accès rapide :")
+        cols_fav = st.columns(4)
+        for i, (num, coords) in enumerate(sorted(st.session_state.favs.items())):
+            if cols_fav[i % 4].button(f"#{num}", key=f"fbtn_{num}"):
+                st.session_state.map_center = [coords[0], coords[1]]
+                st.session_state.zoom_level = 18
+                st.session_state.sync_idx = num - 1
+                st.rerun()
+        if st.button("Vider les favoris", use_container_width=True):
+            st.session_state.favs = {}
             st.rerun()
+
+# --- LOGIQUE DE SCAN ---
+if lancer_scan:
+    if not commune_in:
+        st.error("⚠️ Entrez une commune.")
     else:
-        st.warning("Aucun résultat.")
-else:
-    st.info("Entrez une commune et cliquez sur Scan.")
+        if commune_in.strip().lower() != st.session_state.last_city.strip().lower():
+            st.session_state.favs = {}
+            st.session_state.sync_idx = 0
+            st.session_state.last_res = None
+            
+        components.html(js_close_sidebar, height=0, width=0)
+        try:
+            st.session_state.last_city = commune_in
+            
+            with st.status("Exécution du Scan géomatique...", expanded=True) as status:
+                p_bar = st.progress(10, text="1/3 - Localisation de la commune...")
+                
+                # Étape 1 : Géocodage de la commune unique
+                base = ox.geocode_to_gdf(commune_in).to_crs(epsg=2154)
+                union_zone = base.geometry.union_all()
+                
+                p_bar.progress(50, text="2/3 - Téléchargement ciblé des bâtiments et routes...")
+                # Étape 2 : Zone = Commune + 200m de marge frontalière (sans charger les communes voisines)
+                bbox_m = union_zone.buffer(200)
+                bbox = gpd.GeoSeries([bbox_m], crs=2154).to_crs(epsg=4326).iloc[0]
+                
+                bat = ox.features_from_polygon(bbox, tags={'building': True})
+                routes = ox.features_from_polygon(bbox, tags={'highway': ['primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'trunk']})
+                
+                p_bar.progress(85, text="3/3 - Calculs géospatiaux (distances & isolation KNN)...")
+                # Étape 3 : Calculs mathématiques
+                bat = bat[bat.geometry.type.isin(['Polygon', 'MultiPolygon'])].copy().to_crs(epsg=2154)
+                routes = routes.to_crs(epsg=2154)
+                
+                routes_union = routes.geometry.union_all()
+                bat['d_route'] = bat.geometry.centroid.apply(lambda x: routes_union.distance(x))
+                
+                # Filtrage strict sur la commune d'origine (union_zone)
+                candidates = bat[bat.geometry.centroid.within(union_zone) & (bat['d_route'] >= dist_route_val)].copy()
+                
+                if not candidates.empty:
+                    coords_toutes = list(zip(bat.geometry.centroid.x, bat.geometry.centroid.y))
+                    coords_candidates = list(zip(candidates.geometry.centroid.x, candidates.geometry.centroid.y))
+                    nn = NearestNeighbors(radius=rayon_iso_val).fit(coords_toutes)
+                    adj = nn.radius_neighbors_graph(coords_candidates).toarray()
+                    candidates['taille_hameau'] = adj.sum(axis=1)
+                    st.session_state.last_res = candidates[candidates['taille_hameau'] <= (taille_hameau_max + 1)].copy().to_crs(epsg=4326)
+                    st.session_state.map_center = [st.session_state.last_res.geometry.centroid.y.mean(), st.session_state.last_res.geometry.centroid.x.mean()]
+                
+                p_bar.progress(100, text="Terminé !")
+                p_bar.empty()
+                status.update(label="Scan terminé avec succès !", state="complete", expanded=False)
+                
+        except Exception as e:
+            st.error(f"❌ Erreur lors de l'exécution : {str(e)}")
+
+# --- AFFICHAGE RESULTATS ET CARTE ---
+if st.session_state.last_res is not None:
+    res = st.session_state.last_res
+    if not res.empty:
+        st.success(f"✅ {len(res)} Havens détectés !")
+        
+        m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.zoom_level, tiles=None)
+        
+        folium.TileLayer(
+            tiles='https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', 
+            attr='Google', 
+            name='Satellite', 
+            max_zoom=22,
+            overlay=False
+        ).add_to(m)
+        
+        folium.TileLayer(
+            'OpenStreetMap', 
+            name='Carte Standard',
+            overlay=False
+        ).add_to(m)
+
+        for i, (idx, row) in enumerate(res.iterrows()):
+            lat, lon = row.geometry.centroid.y, row.geometry.centroid.x
+            pop_html = f"""<div style='font-family:Arial; width:170px;'><b>HAVEN #{i+1}</b><br><small>{int(row['taille_hameau'])} bât.</small><hr>
+            <a href='https://www.google.com/maps/search/?api=1&query={lat},{lon}' target='_blank'>🗺️ Google Maps</a><br>
+            <a href='https://waze.com/ul?ll={lat},{lon}&navigate=yes' target='_blank'>🚙 Waze</a></div>"""
+            
+            icon_c = f'<div style="background-color:red; border:2px solid white; border-radius:50%; width:22px; height:22px; color:white; font-weight:bold; font-size:10px; display:flex; justify-content:center; align-items:center;">{i+1}</div>'
+            folium.Marker([lat, lon], popup=folium.Popup(pop_html, max_width=200), icon=folium.DivIcon(html=icon_c)).add_to(m)
+        
+        folium.LayerControl(position='topright', collapsed=False).add_to(m)
+        
+        map_data = st_folium(m, width="100%", height=700, key="main_map", returned_objects=["last_object_clicked"])
+        
+        if map_data and map_data.get("last_object_clicked"):
+            c_lat, c_lon = map_data["last_object_clicked"]["lat"], map_data["last_object_clicked"]["lng"]
+            dists = res.geometry.centroid.apply(lambda p: ((p.y - c_lat)**2 + (p.x - c_lon)**2)**0.5)
+            new_idx = res.index.get_loc(dists.idxmin())
+            if st.session_state.sync_idx != new_idx:
+                st.session_state.sync_idx = new_idx
+                st.rerun()
+
+        csv = res[['taille_hameau', 'd_route']].assign(lat=res.geometry.centroid.y, lon=res.geometry.centroid.x).to_csv(index=False)
+        st.download_button("📥 Télécharger CSV", csv, "haven_radar.csv", "text/csv")
+    else:
+        st.warning("⚠️ Aucun Haven trouvé avec ces critères de recherche sur cette commune.")
